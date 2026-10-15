@@ -3,14 +3,18 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #define TARGET_WINDOWS  1
 #include <windows.h>
-#define DEVICE_DESCRIPTOR HANDLE
+#define DEVICE_HANDLE HANDLE
+#define CTX int
 #else
 #define TARGET_LINUX  1
-#define DEVICE_DESCRIPTOR int
+#include <libusb-1.0/libusb.h>
+#define DEVICE_HANDLE libusb_device_handle
+#define CTX libusb_context
 #endif
 
 class UsbPrinterName {
@@ -43,11 +47,14 @@ public:
 
 class UsbPrinter {
 public:
+    CTX *ctx;
     UsbPrinterName name;
     UsbPrinterProperties properties;
-    DEVICE_DESCRIPTOR device;
-
-    UsbPrinter(const UsbPrinterName& name);
+    DEVICE_HANDLE *deviceHandle;
+#ifdef TARGET_LINUX
+    int interfaceNumber;
+#endif
+    UsbPrinter(CTX *ctx, const UsbPrinterName& name);
     UsbPrinter(const UsbPrinter& value);
     virtual ~UsbPrinter();
     int open();
@@ -61,6 +68,7 @@ public:
 };
 
 int findUsbPrinters(
+    CTX *ctx,
     std::vector<UsbPrinterName> &retVal
 );
 

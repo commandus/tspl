@@ -1,14 +1,16 @@
 #include "tspl.h"
 
 #include <iostream>
+#include <algorithm>
+#include <sstream>
+#include <csignal>
+
+#ifdef TARGET_WINDOWS
+#include <regex>
 #include <setupapi.h>
 #include <initguid.h>
-#include <algorithm>
-#include <regex>
-#include <sstream>
-
-
 DEFINE_GUID(GUID_DEVINTERFACE_USBPRINT, 0x28d78fad, 0x5a12, 0x11D1, 0xae, 0x5b, 0x00, 0x00, 0xf8, 0x03, 0xa8, 0xc2);
+#endif
 
 enum TSPL_COMMAND {
     CMD_GETSETTING = 0,
@@ -47,7 +49,20 @@ std::string cmdString(TSPL_COMMAND cmd) {
     return ss.str();
 }
 
+#ifdef TARGET_LINUX
 int findUsbPrinters(
+    CTX *ctx,
+    std::vector<UsbPrinterName> &retVal
+)
+{
+    retVal.emplace_back(0x0483, 0x5720,"", "P1");
+    return 1;
+}
+#endif
+
+#ifdef TARGET_WINDOWS
+int findUsbPrinters(
+    CTX *ctx,
     std::vector<UsbPrinterName> &retVal
 )
 {
@@ -184,6 +199,7 @@ bool PrintTSPL(const std::string& printerName, const std::string& tsplCommands) 
 
     return true;
 }
+#endif
 
 UsbPrinterName::UsbPrinterName()
     : vid(0), pid(0)
@@ -230,9 +246,10 @@ UsbPrinterName::UsbPrinterName(
 }
 
 UsbPrinter::UsbPrinter(
+    CTX *aCtx,
     const UsbPrinterName &aName
 )
-    : name(aName)
+    : ctx(aCtx), name(aName)
 {
     open();
 }
@@ -240,7 +257,7 @@ UsbPrinter::UsbPrinter(
 int UsbPrinter::open()
 {
 #ifdef TARGET_WINDOWS
-    device = CreateFileA(
+    deviceHandle = CreateFileA(
             name.path.c_str(),
             GENERIC_READ | GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -249,18 +266,44 @@ int UsbPrinter::open()
             FILE_ATTRIBUTE_NORMAL,
             NULL
     );
-#endif
-    if (device == INVALID_HANDLE_VALUE)
+    if (deviceHandle == INVALID_HANDLE_VALUE)
         return -1;
+#endif
+#ifdef TARGET_LINUX
+    deviceHandle = libusb_open_device_with_vid_pid(ctx, name.vid, name.pid);
+    if (!deviceHandle)
+        return -1;
+    interfaceNumber = 0;
+    if (libusb_kernel_driver_active(deviceHandle, interfaceNumber) == 1) {
+        std::cout << "Драйвер ядра активен. Пытаемся отключить..." << std::endl;
+        if (libusb_detach_kernel_driver(deviceHandle, interfaceNumber) == 0) {
+            std::cout << "Системный драйвер успешно отключен." << std::endl;
+        } else {
+            std::cerr << "Ошибка: Не удалось отключить драйвер ядра." << std::endl;
+            return -1;
+        }
+    }
 
+    int r = libusb_claim_interface(deviceHandle, interfaceNumber);
+    if (r < 0) {
+        std::cerr << "Ошибка: Не удалось заявить права на интерфейс (" << r << ")." << std::endl;
+        return -1;
+    }
+
+#endif
     readProperties();
     return 0;
 }
 
 void UsbPrinter::close() {
 #ifdef TARGET_WINDOWS
-    CloseHandle(device);
-    device = nullptr;
+    CloseHandle(deviceHandle);
+    deviceHandle = nullptr;
+#endif
+#ifdef TARGET_LINUX
+    libusb_release_interface(deviceHandle, interfaceNumber);
+    libusb_attach_kernel_driver(deviceHandle, interfaceNumber);
+    libusb_close(deviceHandle);
 #endif
 }
 
@@ -283,11 +326,9 @@ int UsbPrinter::readProperties() {
     if (r)
         return r;
 
-
     r = query(status, "~!T\r\n");
     if (r)
         return r;
-
 
     r = query(properties.model, cmdString(CMD_MODEL));
     if (r)
@@ -311,8 +352,19 @@ int UsbPrinter::write(
 {
 #ifdef TARGET_WINDOWS
     DWORD bytesWritten;
-    if (!WriteFile(device, buffer, (DWORD) len, &bytesWritten, nullptr))
+    if (!WriteFile(deviceHandle, buffer, (DWORD) len, &bytesWritten, nullptr))
         return -1;
+#endif
+#ifdef TARGET_LINUX
+    int actual_length = 0;
+    unsigned int timeout_ms = 5000;
+    uint8_t endpoint_out = 1;
+    int r = libusb_bulk_transfer(
+            deviceHandle,
+            endpoint_out,
+            (unsigned char *) buffer,
+            len, &actual_length, timeout_ms
+    );
 #endif
     return 0;
 }
@@ -328,13 +380,16 @@ void UsbPrinter::delay() {
 #ifdef TARGET_WINDOWS
     Sleep(200);
 #endif
+#ifdef TARGET_LINUX
+    sleep(1);
+#endif
 }
 
 int UsbPrinter::read(std::string &retVal) {
 #ifdef TARGET_WINDOWS
     char buffer[256];
     DWORD bytesRead = 0;
-    if (!ReadFile(device, buffer, (DWORD) (sizeof buffer), &bytesRead, nullptr))
+    if (!ReadFile(deviceHandle, buffer, (DWORD) (sizeof buffer), &bytesRead, nullptr))
         return -1;
     retVal = std::string(buffer, bytesRead);
 #endif
@@ -344,7 +399,7 @@ int UsbPrinter::read(std::string &retVal) {
 UsbPrinter::UsbPrinter(
     const UsbPrinter &value
 )
-    : name(value.name), properties(value.properties), device(value.device)
+    : ctx(value.ctx), name(value.name), properties(value.properties), deviceHandle(value.deviceHandle)
 {
     open();
 }
