@@ -263,7 +263,7 @@ int UsbPrinter::open()
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             NULL,
             OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
+            FILE_FLAG_OVERLAPPED,
             NULL
     );
     if (deviceHandle == INVALID_HANDLE_VALUE)
@@ -287,7 +287,7 @@ int UsbPrinter::open()
 
     int r = libusb_claim_interface(deviceHandle, interfaceNumber);
     if (r < 0) {
-        std::cerr << "Ошибка: Не удалось заявить права на интерфейс (" << r << ")." << std::endl;
+        std::cerr << "Claim interface error (" << r << ")." << std::endl;
         return -1;
     }
 
@@ -359,12 +359,7 @@ int UsbPrinter::write(
     int actual_length = 0;
     unsigned int timeout_ms = 5000;
     uint8_t endpoint_out = 1;
-    int r = libusb_bulk_transfer(
-            deviceHandle,
-            endpoint_out,
-            (unsigned char *) buffer,
-            len, &actual_length, timeout_ms
-    );
+    int r = libusb_bulk_transfer(deviceHandle, endpoint_out, (unsigned char *) buffer, len, &actual_length, timeout_ms);
 #endif
     return 0;
 }
@@ -386,14 +381,41 @@ void UsbPrinter::delay() {
 }
 
 int UsbPrinter::read(std::string &retVal) {
+    char receivedData[1024]; // 64, 512 or 1024
 #ifdef TARGET_WINDOWS
-    char buffer[256];
     DWORD bytesRead = 0;
-    if (!ReadFile(deviceHandle, buffer, (DWORD) (sizeof buffer), &bytesRead, nullptr))
-        return -1;
-    retVal = std::string(buffer, bytesRead);
+    int r = 0;
+    OVERLAPPED overlapped = { 0 };
+    overlapped.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr); // Manual-reset event
+    if (overlapped.hEvent == nullptr) {
+        return -2;
+    }
+    if (ReadFile(deviceHandle, receivedData, (DWORD) (sizeof receivedData), &bytesRead, &overlapped)) {
+        // data was in the buffer already
+    } else {
+        DWORD waitResult = WaitForSingleObject(overlapped.hEvent, 1000);
+        if (waitResult == WAIT_OBJECT_0) {
+            if (GetOverlappedResult(deviceHandle, &overlapped, &bytesRead, TRUE)) {
+                // data received with delay
+            } else {
+                // error
+                r = -3;
+            }
+        }
+        else if (waitResult == WAIT_TIMEOUT) {
+            CancelIoEx(deviceHandle, &overlapped);
+            r = -4;
+        } else
+            r = -5;
+    }
+    CloseHandle(overlapped.hEvent);
 #endif
-    return 0;
+#ifdef TARGET_LINUX
+    int bytesRead = 0;
+    r = libusb_bulk_transfer(deviceHandle, 0x81, receivedData, sizeof(receivedData), &bytesRead, 1000); // 1s
+#endif
+    retVal = std::string(receivedData, bytesRead);
+    return r;
 }
 
 UsbPrinter::UsbPrinter(
