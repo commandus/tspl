@@ -107,8 +107,8 @@ int findUsbPrinters(
                 }
 
                 retVal.emplace_back(
-                std::stoul(matches[1].str(), nullptr, 16),
-                std::stoul(matches[2].str(), nullptr, 16),
+                (uint16_t) std::stoul(matches[1].str(), nullptr, 16),
+                (uint16_t) std::stoul(matches[2].str(), nullptr, 16),
                 path, friendlyName
                 );
                 c++;
@@ -275,12 +275,13 @@ int UsbPrinter::open()
         return -1;
     interfaceNumber = 0;
     if (libusb_kernel_driver_active(deviceHandle, interfaceNumber) == 1) {
-        std::cout << "Драйвер ядра активен. Пытаемся отключить..." << std::endl;
-        if (libusb_detach_kernel_driver(deviceHandle, interfaceNumber) == 0) {
-            std::cout << "Системный драйвер успешно отключен." << std::endl;
+        std::cout << "Kernel driver activated. Trying to deactivate driver.." << std::endl;
+        int deactivateErrorCode = libusb_detach_kernel_driver(deviceHandle, interfaceNumber);
+        if (deactivateErrorCode == 0) {
+            std::cout << "Kernel driver deactivated successfully." << std::endl;
         } else {
-            std::cerr << "Ошибка: Не удалось отключить драйвер ядра." << std::endl;
-            return -1;
+            std::cerr << "Kernel driver deactivation error " << deactivateErrorCode << std::endl;
+            return deactivateErrorCode;
         }
     }
 
@@ -319,7 +320,6 @@ int UsbPrinter::query(
 }
 
 int UsbPrinter::readProperties() {
-
     std::string status;
     // "\x1b!?" ""
     int r = query(status, "{STATUS}\r\n");

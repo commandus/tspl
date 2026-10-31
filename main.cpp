@@ -7,8 +7,8 @@
 #endif
 
 int main() {
-#ifdef TARGET_LINUX
     CTX *ctx = nullptr;
+#ifdef TARGET_LINUX
     if (libusb_init(&ctx) < 0) {
         std::cerr << "libusb error" << std::endl;
         return -1;
