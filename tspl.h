@@ -109,6 +109,7 @@ public:
     int read(std::string& retVal);
     int query(std::string& retVal, const std::string& request);
     int readProperties();
+    int readUsbName(std::string &retVal);
 };
 
 bool PrintTSPL2(

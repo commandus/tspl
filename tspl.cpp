@@ -9,6 +9,7 @@
 #include <regex>
 #include <setupapi.h>
 #include <initguid.h>
+#include <hidsdi.h>
 DEFINE_GUID(GUID_DEVINTERFACE_USBPRINT, 0x28d78fad, 0x5a12, 0x11D1, 0xae, 0x5b, 0x00, 0x00, 0xf8, 0x03, 0xa8, 0xc2);
 #endif
 
@@ -292,7 +293,9 @@ int UsbPrinter::open()
     }
 
 #endif
-    readProperties();
+    if (readProperties() != 0) {
+        readUsbName(name.name);
+    }
     return 0;
 }
 
@@ -321,15 +324,22 @@ int UsbPrinter::query(
 
 int UsbPrinter::readProperties() {
     std::string status;
+
+    int r;
+    /*
+    // XP-365B,203,12345678
+    r = query(status, "~HI\r\n");
+    if (r)
+        return r;
     // "\x1b!?" ""
-    int r = query(status, "{STATUS}\r\n");
+    r = query(status, "{STATUS}\r\n");
     if (r)
         return r;
 
     r = query(status, "~!T\r\n");
     if (r)
         return r;
-
+    */
     r = query(properties.model, cmdString(CMD_MODEL));
     if (r)
         return r;
@@ -428,6 +438,34 @@ UsbPrinter::UsbPrinter(
 
 UsbPrinter::~UsbPrinter() {
     close();
+}
+
+#ifdef TARGET_WINDOWS
+static std::string wcharToUtf8(
+    const wchar_t* src
+)
+{
+    if (!src)
+        return "";
+    int sizeNeeded = WideCharToMultiByte(CP_UTF8, 0, src, -1, nullptr, 0, nullptr, nullptr);
+    if (sizeNeeded <= 0)
+        return "";
+    std::string r(sizeNeeded - 1, 0); // zero terminated
+    WideCharToMultiByte(CP_UTF8, 0, src, -1, &r[0], sizeNeeded, nullptr, nullptr);
+    return r;
+}
+#endif
+
+int UsbPrinter::readUsbName(
+    std::string &retVal
+) {
+#ifdef TARGET_WINDOWS
+    WCHAR productString[128] = { 0 };
+    if (!HidD_GetProductString(deviceHandle, productString, sizeof(productString)))
+        return -1;
+    retVal = wcharToUtf8(productString);
+#endif
+    return 0;
 }
 
 UsbPrinterProperties::UsbPrinterProperties()

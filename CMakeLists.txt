@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 11)
 
 add_executable(tspl tspl.cpp main.cpp)
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
-    set(EXTRA_LIBS setupapi.lib)
+    set(EXTRA_LIBS setupapi.lib hid.lib)
 else()
     set(EXTRA_LIBS usb-1.0)
 endif()
